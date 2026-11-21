@@ -91,13 +91,13 @@ cv.addEventListener('pointerdown',()=>tap('start'));
 document.addEventListener('contextmenu',e=>e.preventDefault());
 
 /* ---------- stages (data, not hardcoded) ---------- */
-/* Enemy letters: R raccoon, B winged rat, C dashing alley cat, P diving pigeon.
+/* Enemy letters: T rat (level 1 baddie), R raccoon (level 2 baddie), B winged rat, C dashing alley cat, P diving pigeon, O code enforcement officer (bonus 2 only).
    Every stage's last wave is the boss. Story spine: Lazarus sells the cartridge
    at the Comic Crypt (stage 1), cuts through the neon subway (stage 2),
    and crosses the rooftops to reach the gig itself (stage 3). */
 const STAGES=[
  {name:'THE GUTTER MILE',theme:0,len:2700,endName:'COMIC CRYPT',
-  waves:[{at:420,q:['R','R']},{at:900,q:['R','B','R']},{at:1400,q:['R','B','R','B']},{at:1900,q:['B','R','R','B','R']},{at:2380,q:['BOSS']}],
+  waves:[{at:420,q:['T','T']},{at:900,q:['T','T','T','T']},{at:1400,q:['T','R','T','B']},{at:1900,q:['R','T','R','B']},{at:2380,q:['BOSS']}],
   boss:{kind:'rackula',name:'COUNT RACKULA',hp:230,pts:2000,bar:'#9a1fd0',scale:2}},
  {name:'NEON SUBWAY',theme:1,len:2900,endName:'EXIT TO THE GIG',
   waves:[{at:420,q:['C','R','C']},{at:950,q:['P','R','P','C']},{at:1500,q:['R','C','B','P','R']},{at:2050,q:['C','C','P','B','R']},{at:2500,q:['BOSS']}],
@@ -106,25 +106,51 @@ const STAGES=[
   waves:[{at:420,q:['R','C','P','R']},{at:1000,q:['C','B','C','P','R']},{at:1600,q:['P','R','C','B','C','R']},{at:2200,q:['C','P','R','B','C','P']},{at:2620,q:['BOSS']}],
   boss:{kind:'baron',name:'BARON VON COON',hp:330,pts:3000,bar:'#e0302f',scale:2.6}}
 ];
-const PTS={R:150,B:100,C:200,P:120};
+const PTS={R:150,B:100,C:200,P:120,T:100};
 
 /* ---------- state ---------- */
-let state='title',stT=0,frame=0,camX=0,lockCam=null,shake=0,P,enemies,parts,pops,pickups,projs,waves,score,boss,goT,introT,deadT,stageIdx=0,stageStartScore=0,LEVEL_END=2700;
+let state='title',stT=0,frame=0,camX=0,lockCam=null,shake=0,P,enemies,parts,pops,pickups,projs,waves,score,boss,goT,introT,deadT,stageIdx=0,stageStartScore=0,LEVEL_END=2700,bonus=null;
 function setupStage(){
  const st=STAGES[stageIdx];LEVEL_END=st.len;
  waves=st.waves.map(w=>({at:w.at,q:w.q.slice(),active:false,done:false,n:0,st:0}));
- enemies=[];parts=[];pops=[];pickups=[];projs=[];boss=null;goT=0;introT=170;deadT=0;camX=0;lockCam=null;shake=0;
- P.x=70;P.y=205;P.z=0;P.vz=0;P.vx=0;P.atk=null;P.buf=null;P.down=0;P.hurt=0;P.inv=60;P.jumps=0;P.flip=0;P.bvx=0;
+ enemies=[];parts=[];pops=[];pickups=[];projs=[];boss=null;goT=0;introT=170;deadT=0;camX=0;lockCam=null;shake=0;bonus=null;
+ P.x=70;P.y=205;P.z=0;P.vz=0;P.vx=0;P.atk=null;P.buf=null;P.down=0;P.hurt=0;P.inv=60;P.jumps=0;P.flip=0;P.bvx=0;P.crash=false;
 }
 function reset(){
- P={x:70,y:205,z:0,vz:0,vx:0,face:1,hp:100,meter:0,inv:0,atk:null,combo:0,comboT:0,hurt:0,down:0,walk:0,lives:2,buf:null,dead:false,jumps:0,flip:0,bvx:0};
+ P={x:70,y:205,z:0,vz:0,vx:0,face:1,hp:100,meter:0,inv:0,atk:null,combo:0,comboT:0,hurt:0,down:0,walk:0,lives:2,buf:null,dead:false,jumps:0,flip:0,bvx:0,crash:false};
  score=0;stageIdx=0;stageStartScore=0;setupStage();
 }
 function restartStage(){ /* death restarts the CURRENT stage; score rolls back to what it was when the stage began */
+ if(bonus)return; /* a bonus stage cannot kill the player, so there is never anything to restart from one */
  P.hp=100;P.lives=2;P.dead=false;P.down=0;P.hurt=0;P.inv=0;P.meter=0;P.atk=null;P.buf=null;P.combo=0;
  score=stageStartScore;setupStage();state='play';
 }
-function nextStage(){ /* score, lives and meter carry over; health refills by half */
+function startBonus(kind){ /* bonus stages reuse the current stage's arena and the same movement/attack code; the player cannot die in one and score carries through */
+ setupStage();
+ bonus={kind,t:45*60,shown:false};introT=0;
+ if(kind===1){bonus.cans=0;bonus.spawnT=0}
+ else{bonus.hearts=3;bonus.stopped=0;bonus.spawnT=90;bonus.campX=camX+34}
+ state='play';
+ pop(P.x,P.y,70,kind===1?'BONUS: CAN RUN!':'BONUS: DEFEND THE CAMP!','#ffd34f');sfx('pick');
+}
+function endBonus(){
+ const b=bonus;bonus=null;
+ const msg=b.kind===1?'TIME! '+b.cans+' CANS = '+(b.cans*150)+' PTS':(b.hearts>0?'CAMP HELD! ':'CAMP OVERRUN! ')+b.stopped+' STOPPED';
+ nextStage(true);
+ pop(P.x,P.y,84,msg,'#ffd34f');
+}
+function updBonus(){
+ bonus.t--;
+ if(bonus.kind===1){ /* CAN RUN: one can at a time at a random spot; walk over it to collect */
+  if(--bonus.spawnT<=0&&!pickups.some(k=>k.kind==='can')){pickups.push({kind:'can',x:camX+50+rnd(W-100),y:GY0+16+rnd(GY1-GY0-32),t:99999});bonus.spawnT=30}
+ }else{ /* DEFEND THE CAMP: officers walk in from the right and make for the camp at the left edge */
+  if(--bonus.spawnT<=0&&bonus.t>0){enemies.push(mkO(camX+W+26,GY0+20+rnd(GY1-GY0-40)));bonus.spawnT=170+rnd(90)}
+  for(const e of enemies){if(!e.dead&&e.x<=bonus.campX+16){e.dead=true;e.t=1;bonus.hearts--;shake=Math.max(shake,8);pop(bonus.campX+10,(GY0+GY1)/2,60,'CAMP HIT!','#ff4040');sfx('hurt');burst(bonus.campX+10,(GY0+GY1)/2,20,10,'#ff4040')}}
+ }
+ if(bonus.t<=0||(bonus.kind===2&&bonus.hearts<=0))endBonus();
+}
+function nextStage(fromBonus){ /* score, lives and meter carry over; health refills by half */
+ if(!fromBonus&&stageIdx<2){startBonus(stageIdx+1);return} /* after stages 1 and 2 a bonus stage comes first (Anna's design) */
  stageIdx++;stageStartScore=score;const healed=Math.min(100,P.hp+50);setupStage();P.hp=healed;
  pop(P.x,P.y,70,'STAGE CLEAR! +50 HP','#4fffb0');sfx('pick');
 }
@@ -139,11 +165,13 @@ function mkR(x,y){return{type:'R',x,y,z:0,vx:0,vz:0,hp:30,w:10,h:22,face:-1,st:'
 function mkB(x,y){return{type:'B',x,y,z:70,vx:0,vz:0,hp:12,w:8,h:12,face:-1,st:'hover',t:0,cd:70+rnd(80),flash:0,anim:rnd(100),dead:false,off:(Math.random()<.5?-1:1)*70}}
 function mkC(x,y){return{type:'C',x,y,z:0,vx:0,vz:0,hp:20,w:14,h:14,face:-1,st:'walk',t:0,cd:60+rnd(70),flash:0,anim:rnd(60),dead:false}}
 function mkP(x,y){return{type:'P',x,y,z:80,vx:0,vz:0,hp:10,w:8,h:12,face:-1,st:'hover',t:0,cd:80+rnd(80),flash:0,anim:rnd(100),dead:false,off:(Math.random()<.5?-1:1)*56,tx:0,ty:0,sx:0,sy:0,sz:0}}
+function mkRat(x,y){return{type:'T',x,y,z:0,vx:0,vz:0,hp:12,w:9,h:11,face:-1,st:'walk',t:0,cd:40+rnd(50),flash:0,anim:rnd(60),dead:false}}
+function mkO(x,y){return{type:'O',x,y,z:0,vx:0,vz:0,hp:20,w:10,h:40,face:-1,st:'walk',t:0,cd:0,flash:0,anim:rnd(60),dead:false}} /* code enforcement officer (bonus 2): walks at the camp, never attacks the player */
 function mkBoss(x,y){const b=STAGES[stageIdx].boss;return{type:'boss',kind:b.kind,name:b.name,x,y,z:0,vx:0,vz:0,hp:b.hp,max:b.hp,pts:b.pts,bar:b.bar,scale:b.scale,w:20,h:46,face:-1,st:'walk',t:0,cd:110,flash:0,anim:0,dead:false,dashN:0}}
 function touch(e,r){return Math.abs(P.x-e.x)<r&&Math.abs(P.y-e.y)<10&&P.z<e.z+e.h&&P.z+44>e.z&&P.inv<=0&&P.down<=0}
 
 function hurtPlayer(d,dir,kd){
- if(P.inv>0||P.down>0||state!=='play')return;
+ if(P.inv>0||P.down>0||state!=='play'||bonus)return; /* bonus stages: no damage and no dying */
  P.hp-=d;P.inv=55;P.atk=null;P.buf=null;shake=Math.max(shake,6);sfx('hurt');burst(P.x,P.y,30,5,'#d12a2a');
  if(kd||P.z>0){P.down=42;P.vx=dir*3;P.vz=3;P.z=Math.max(P.z,1)}else{P.hurt=14;P.vx=dir*2}
  if(P.hp<=0){P.hp=0;
@@ -154,20 +182,22 @@ function hurtEnemy(e,d,dir,kd){
  e.hp-=d;e.flash=8;sfx('hit');burst(e.x,e.y,e.z+e.h/2,4,'#7a0f2a');sparks(e.x,e.y,e.z+e.h/2,5);
  if(Math.random()<.45)pop(e.x,e.y,e.z+e.h+6,HITW[rnd(HITW.length)],'#fff27a');
  if(e.type==='boss'){if(e.st!=='charge'&&e.st!=='dash')e.x+=dir*(kd?6:2);if(kd)shake=Math.max(shake,5)}
- else{e.st='hurt';e.t=kd?32:12;e.vx=dir*(kd?3.6:1.4);if(e.type==='R'&&kd)e.vz=3;if(e.type==='P'){e.z=Math.max(5,e.z-4)}}
+ else{e.st='hurt';e.t=kd?32:12;e.vx=dir*(kd?3.6:1.4);if((e.type==='R'||e.type==='T')&&kd)e.vz=3;if(e.type==='P'){e.z=Math.max(5,e.z-4)}}
  if(e.hp<=0){e.dead=true;e.vx=dir*3;e.vz=4;e.t=e.type==='boss'?90:50;sfx('kill');
-  score+=e.type==='boss'?e.pts:PTS[e.type];
+  score+=(e.type==='boss'?e.pts:PTS[e.type]||0);
   burst(e.x,e.y,e.z+10,e.type==='boss'?40:12,e.type==='boss'?'#9a1fd0':'#7a0f2a',e.type==='boss'?4:2.5);
   if(e.type==='boss'){shake=20;pop(e.x,e.y,90,e.name+' IS DUST','#e8b0ff');if(boss===e)boss=null;pickups.push({kind:'potion',x:e.x,y:e.y,t:700})}
-  else{if(Math.random()<(e.type==='R'?.2:e.type==='C'?.25:.1))pickups.push({kind:'pizza',x:e.x,y:e.y,t:700});
-   if(Math.random()<.12)pickups.push({kind:'potion',x:e.x,y:e.y,t:700})}}
+  else{if(e.type==='O'&&bonus&&bonus.kind===2){bonus.stopped++;score+=200;pop(e.x,e.y,56,'STOPPED +200','#4fffb0')}
+   if(Math.random()<(e.type==='R'?.2:e.type==='C'?.25:.1))pickups.push({kind:'pizza',x:e.x,y:e.y,t:700});
+   if(Math.random()<.12)pickups.push({kind:'potion',x:e.x,y:e.y,t:700});
+   if(e.type==='T'&&Math.random()<.3)pickups.push({kind:'ebt',x:e.x,y:e.y,t:700})}}
 }
 function doHits(a){
  for(const e of enemies){if(e.dead||a.hit.has(e))continue;
   const dx=(e.x-P.x)*P.face;if(dx<2||dx>a.reach+e.w)continue;
   if(Math.abs(e.y-P.y)>14)continue;
   if(e.z+e.h<P.z-5||e.z>P.z+40)continue;
-  a.hit.add(e);hurtEnemy(e,a.dmg,P.face,a.kd);P.meter=Math.min(100,P.meter+7);score+=10}
+  a.hit.add(e);hurtEnemy(e,a.dmg,P.face,a.kd);if(a.type==='jk')pop(e.x,e.y,e.z+e.h+8,'DROPKICK!','#7fd0ff');P.meter=Math.min(100,P.meter+7);score+=10}
 }
 function doSpecial(){
  sfx('rock');shake=14;parts.push({ring:1,x:P.x,y:P.y,r:6,life:34});
@@ -186,7 +216,10 @@ function startAtk(type){
  else P.atk={type:'k',t:0,dur:20,a0:6,a1:12,dmg:13,reach:30,kd:true,hit:new Set()};
 }
 function updPlayer(){
- if(P.z>0||P.vz>0){P.z+=P.vz;P.vz-=.42;if(P.z<=0){P.z=0;P.vz=0;P.jumps=0;P.flip=0;P.bvx=0;burst(P.x,P.y,2,4,'#8a8378',1);if(P.atk&&P.atk.type==='jk')P.atk=null}}
+ if(P.z>0||P.vz>0){P.z+=P.vz;P.vz-=.42;if(P.z<=0){P.z=0;P.vz=0;const crash=P.crash;P.jumps=0;P.flip=0;P.bvx=0;P.crash=false;burst(P.x,P.y,2,4,'#8a8378',1);
+  if(crash){shake=Math.max(shake,7);burst(P.x,P.y,4,16,'#a89a80',2.5);pop(P.x,P.y,56,'CRASH!','#ffd34f');sfx('kill');
+   for(const e of enemies){if(e.dead||e.type==='B'||e.type==='P')continue;if(Math.abs(e.x-P.x)<48&&Math.abs(e.y-P.y)<26)hurtEnemy(e,20,P.face,true)}} /* flip landing = Anna's crash/stomp: area damage + knockdown; a plain jump landing stays soft */
+  if(P.atk&&P.atk.type==='jk')P.atk=null}}
  if(P.flip>0)P.flip--;
  if(P.z>0&&P.bvx){P.x+=P.bvx;P.bvx*=.9;if(Math.abs(P.bvx)<.2)P.bvx=0}
  if(P.inv>0)P.inv--;
@@ -198,8 +231,8 @@ function updPlayer(){
  if(!mx&&!my&&!P.atk&&P.down<=0)autoFace(70,50); /* soft auto-face: only while no direction is held and not mid-attack, so it never fights the player's steering */
  if(P.hurt<=0){
   if(press.jump&&ground&&!P.atk){P.vz=6.3;P.jumps=1;sfx('jump')}
-  else if(press.jump&&!ground&&P.jumps===1){P.vz=5.6;P.jumps=2;P.flip=18;P.bvx=P.face*4.2;sfx('jump');burst(P.x,P.y,P.z,4,'#cfd4da',1)} /* double jump: the flip — renewed lift plus a forward boost in the facing direction, one per airborne period */
-  if(!ground){if((press.punch||press.kick)&&!P.atk){autoFace(170,50);P.atk={type:'jk',t:0,dmg:18,reach:30,kd:true,hit:new Set()}}}
+  else if(press.jump&&!ground&&P.jumps===1){P.vz=5.6;P.jumps=2;P.flip=18;P.crash=true;P.bvx=P.face*4.2;sfx('jump');burst(P.x,P.y,P.z,4,'#cfd4da',1)} /* double jump: the flip — renewed lift plus a forward boost in the facing direction, one per airborne period */
+  if(!ground){if((press.punch||press.kick)&&!P.atk){autoFace(170,50);P.atk={type:'jk',t:0,dmg:26,reach:32,kd:true,hit:new Set()};P.x+=P.face*7;P.bvx=P.face*2.4}} /* DROPKICK: both-feet lunge, heavier than the old jump kick, always knocks down */
   else if(press.special&&P.meter>=100&&(!P.atk||P.atk.type!=='sp')){P.meter=0;P.atk={type:'sp',t:0,dur:36,hit:new Set()};doSpecial()}
   else if(!P.atk){if(press.punch)startAtk('p');else if(press.kick)startAtk('k')}
   else if(P.atk.type==='p'||P.atk.type==='k'){if(press.punch)P.buf='p';else if(press.kick)P.buf='k'}
@@ -210,7 +243,10 @@ function updPlayer(){
   if(a.type!=='jk'&&a.t>=a.dur){if(a.type==='p')P.comboT=20;P.atk=null;if(P.buf){const b=P.buf;P.buf=null;startAtk(b)}}}
  bound();
  for(const k of pickups){if(Math.abs(k.x-P.x)<14&&Math.abs(k.y-P.y)<10&&P.z<10){k.t=0;sfx('pick');
-  if(k.kind==='potion'){P.hp=Math.min(100,P.hp+40);pop(P.x,P.y,56,'POTION +40','#ff5a5a')}
+  if(k.kind==='ebt'){P.hp=Math.min(200,P.hp+25);pop(P.x,P.y,56,'EBT +25','#7fd0ff')} /* EBT card: the only heal that STACKS past 100, hard cap 200 */
+  else if(k.kind==='can'){if(bonus&&bonus.kind===1){bonus.cans++;score+=150;pop(P.x,P.y,56,'CAN +150','#ffd34f');tone(880,.09,'square',.06,1.8)}}
+  else if(P.hp>=100){score+=100;pop(P.x,P.y,56,'TASTY +100','#ffb020')} /* already at full health: pizza and potions turn into score instead of being wasted */
+  else if(k.kind==='potion'){P.hp=Math.min(100,P.hp+40);pop(P.x,P.y,56,'POTION +40','#ff5a5a')}
   else{P.hp=Math.min(100,P.hp+30);score+=50;pop(P.x,P.y,56,'PIZZA!','#ffb020')}}}
  for(const s of projs){ /* boss ground shockwaves: jump over them or get hit */
   if(Math.abs(s.x-P.x)<12&&Math.abs(s.y-P.y)<10&&P.z<12)hurtPlayer(12,s.vx>0?1:-1,false)}
@@ -223,7 +259,19 @@ function updEnemy(e){
  e.anim++;if(e.flash>0)e.flash--;
  if(e.dead){e.x+=e.vx;e.vx*=.94;if(e.type==='B'||e.type==='P')e.z=Math.max(0,e.z-2.5);else phys(e);e.t--;return}
  const dx=P.x-e.x,dy=P.y-e.y,adx=Math.abs(dx);
- if(e.type==='R'){switch(e.st){
+ if(e.type==='T'){switch(e.st){ /* rat: small, fast, scampers in low with a short lunge bite */
+  case 'hurt':e.x+=e.vx;e.vx*=.86;phys(e);if(--e.t<=0&&e.z===0){e.st='walk';e.cd=Math.max(e.cd,20)}break;
+  case 'walk':{e.face=dx>=0?1:-1;const tx=P.x-e.face*20,ex=tx-e.x,ey=P.y-e.y;
+   e.x+=clamp(ex,-1.9,1.9);e.y+=clamp(ey,-1.2,1.2);
+   if(e.cd>0)e.cd--;else if(adx<40&&Math.abs(dy)<10&&P.down<=0){e.st='wind';e.t=14}break}
+  case 'wind':if(--e.t<=0){e.st='lunge';e.t=11;e.vx=e.face*3.8;sfx('hiss')}break;
+  case 'lunge':e.x+=e.vx;e.vx*=.93;
+   if(touch(e,14))hurtPlayer(6,e.face,false);
+   if(--e.t<=0){e.st='walk';e.cd=55+rnd(60)}break}}
+ else if(e.type==='O'){switch(e.st){ /* officer: a single-minded walk at the camp; being hit is the only thing that slows him down */
+  case 'hurt':e.x+=e.vx;e.vx*=.86;phys(e);if(--e.t<=0&&e.z===0)e.st='walk';break;
+  default:e.face=-1;e.x-=.75;break}}
+ else if(e.type==='R'){switch(e.st){
   case 'hurt':e.x+=e.vx;e.vx*=.86;phys(e);if(--e.t<=0&&e.z===0){e.st='walk';e.cd=Math.max(e.cd,25)}break;
   case 'walk':{e.face=dx>=0?1:-1;const tx=P.x-e.face*28,ex=tx-e.x,ey=P.y-e.y;
    e.x+=clamp(ex,-1.1,1.1);e.y+=clamp(ey,-.75,.75);
@@ -312,7 +360,7 @@ function updEnemy(e){
 /* ---------- waves & camera ---------- */
 function spawn(kind,w){
  const base=lockCam!=null?lockCam:camX,side=(w.n++%2)?-1:1,x=side>0?base+W+24:base-24,y=GY0+8+rnd(GY1-GY0-16);
- if(kind==='R')enemies.push(mkR(x,y));else if(kind==='B')enemies.push(mkB(x,y));
+ if(kind==='R')enemies.push(mkR(x,y));else if(kind==='T')enemies.push(mkRat(x,y));else if(kind==='B')enemies.push(mkB(x,y));
  else if(kind==='C')enemies.push(mkC(x,y));else if(kind==='P')enemies.push(mkP(x,y));
  else{boss=mkBoss(base+W+30,(GY0+GY1)/2);enemies.push(boss);pop(base+W/2,190,110,boss.name,'#e8b0ff')}
 }
@@ -335,11 +383,12 @@ function tick(){
  frame++;
  if(state==='play'){
   updPlayer();for(const e of enemies)updEnemy(e);
+  if(bonus)updBonus();
   for(const s of projs){s.x+=s.vx;s.t--}projs=projs.filter(s=>s.t>0);
   for(let i=0;i<enemies.length;i++)for(let j=i+1;j<enemies.length;j++){const a=enemies[i],b=enemies[j];
    if(a.dead||b.dead||a.type==='B'||a.type==='P'||b.type==='B'||b.type==='P')continue;if(Math.abs(b.x-a.x)<14&&Math.abs(b.y-a.y)<8){const s=b.y>=a.y?1:-1;a.y-=s*.5;b.y+=s*.5}}
   enemies=enemies.filter(e=>!(e.dead&&e.t<=0));
-  updWaves();updCam();
+  if(!bonus)updWaves();updCam();
   if(goT>0)goT--;if(introT>0)introT--;
   if(P.dead&&--deadT<=0){state='over';stT=0}
  }else{stT++;if(press.start&&stT>40){if(state==='over')restartStage();else{reset();state='play'}}}
@@ -462,7 +511,7 @@ function drawLaz(){
  if(t!=='sp'){R(-12,-48,3,20,'#5a3a1a');R(-13,-51,5,4,'#151515');R(-15,-30,9,12,'#a8401a');R(-14,-29,7,2,'#c85a2a');R(-12,-26,3,3,'#2a1208')}
  if(act&&(t==='p'||t==='k')){ctx.strokeStyle='rgba(255,255,255,.75)';ctx.lineWidth=2;ctx.beginPath();ctx.arc(14,-26,15,t==='p'?-.9:-.4,t==='p'?.5:.9);ctx.stroke();ctx.beginPath();ctx.arc(14,-26,10,-.6,.4);ctx.stroke()}
  if(t==='k'&&act){R(-6,-16,5,14,'#2d3d6e');R(-7,-3,7,3,'#111');R(2,-19,18,5,'#34477d');R(19,-21,5,7,'#111')}
- else if(t==='jk'){R(-7,-14,10,5,'#2d3d6e');R(-8,-14,3,6,'#111');R(2,-18,18,5,'#34477d');R(19,-20,5,7,'#111')}
+ else if(t==='jk'){R(0,-16,20,5,'#2d3d6e');R(18,-18,7,6,'#111');R(1,-9,20,5,'#34477d');R(19,-11,7,6,'#111')} /* dropkick: both feet extended */
  else if(air){R(-6,-16,5,10,'#2d3d6e');R(-7,-7,7,3,'#111');R(1,-16,5,10,'#34477d');R(1,-7,8,3,'#111')}
  else{R(-6-wk,-16,5,14,'#2d3d6e');R(-7-wk,-3,7,3,'#111');R(1+wk,-16,5,14,'#34477d');R(1+wk,-3,8,3,'#111');R(3+wk,-10,2,2,'#7a8fc0')}
  R(-9,-33,18,19,'#101016');R(-8,-32,16,17,'#1c1c22');R(-2,-32,5,13,'#c2262e');R(-1,-28,3,2,'#f2d34a');R(-8,-32,3,15,'#2a2a32');R(-8,-33,16,2,'#33333e');
@@ -497,6 +546,24 @@ function drawRat(e){
  R(-8,-11,14,8,'#241a10');R(-7,-10,12,6,'#57432f');R(-7,-10,12,2,'#6a543c');R(4,-11,6,5,'#57432f');R(9,-9,2,2,'#d79a9a');R(5,-13,2,2,'#c98a8a');R(6,-10,2,1,'#ff2a2a');R(8,-7,1,2,'#fff');
  ctx.fillStyle='#3e1c52';ctx.beginPath();ctx.moveTo(0,-9);ctx.lineTo(4,wy-6);ctx.lineTo(-6,wy-2);ctx.lineTo(-3,-6);ctx.fill();
  R(-4,-5,2,2,'#3a2a1c');R(1,-5,2,2,'#3a2a1c');
+}
+function drawRatCritter(e){ /* the street rat: low, quick, all teeth — the sharp-toothed critter from Anna's drawing */
+ const a=e.anim,sc=e.st==='walk'?Math.round(Math.sin(a*.55)*1.5):0;
+ R(-13,-3,10,2,'#8a5a6a');R(-18,-4,6,2,'#a06a7a'); /* long pink tail dragging behind */
+ R(-6+sc,-4,3,4,'#232028');R(2+sc,-4,3,4,'#232028');
+ R(-9,-12,19,9,'#17141c');R(-8,-11,17,7,'#3d3a45');R(-8,-11,17,2,'#4c4855');
+ R(8,-13,9,8,'#17141c');R(9,-12,7,6,'#3d3a45');
+ R(6,-16,3,4,'#4c4855');R(7,-17,1,2,'#8a5a6a');
+ R(12,-10,2,2,'#0a0a0a');R(11,-9,1,1,'#ff2a2a');
+ R(13,-8,3,2,'#d8d3c8');R(13,-6,1,2,'#fff');R(15,-6,1,2,'#fff');R(14,-4,1,1,'#fff'); /* the sharp teeth */
+ if(e.st==='wind')R(10,-5,6,1,'#ff4040'); /* mouth open before the lunge */
+}
+function drawOfficer(e){ /* code enforcement: shirt, tie and a clipboard; he wants the camp, not Lazarus */
+ const a=e.anim,st=e.st==='walk'?Math.round(Math.sin(a*.22)*2):0;
+ R(-4+st,-12,4,12,'#2c2c34');R(-5+st,-1,6,3,'#111');R(1-st,-12,4,12,'#34343e');R(0-st,-1,6,3,'#111');
+ R(-6,-30,13,19,'#23222b');R(-5,-29,11,17,'#cfd4da');R(-1,-29,2,10,'#7a1a1a');R(-2,-24,4,2,'#b8bec6');
+ R(5,-28,4,12,'#cfd4da');R(8,-17,7,9,'#8a6a35');R(9,-16,5,7,'#e8e2d4');R(10,-15,3,1,'#5a5a66');R(10,-13,3,1,'#5a5a66'); /* the clipboard */
+ R(-4,-40,9,10,'#d29a62');R(-4,-41,9,3,'#3a3a42');R(-1,-35,3,1,'#8a4a2a');
 }
 function drawCat(e,boss){
  const a=e.anim,crouch=e.st==='wind'||e.st==='crouch',dash=e.st==='dash',step=e.st==='walk'?Math.round(Math.sin(a*.34)*2):0;
@@ -536,7 +603,7 @@ function drawEnt(e){
  ctx.save();ctx.translate(Math.round(x),Math.round(e.y-e.z));const sc=boss?e.scale:1;ctx.scale(e.face*sc,sc);
  if(e.dead){ctx.translate(0,-8);ctx.rotate(e.type==='B'||e.type==='P'?Math.PI:-.6)}
  if(e.flash>0&&frame%4<2)ctx.globalAlpha=.35;
- if(e.type==='B')drawRat(e);else if(e.type==='P')drawPigeon(e);else if(e.type==='C'||e.kind==='scratch')drawCat(e,boss);else drawRaccoon(e,boss);
+ if(e.type==='B')drawRat(e);else if(e.type==='T')drawRatCritter(e);else if(e.type==='O')drawOfficer(e);else if(e.type==='P')drawPigeon(e);else if(e.type==='C'||e.kind==='scratch')drawCat(e,boss);else drawRaccoon(e,boss);
  ctx.restore();
  if(e.flash>0){ctx.save();ctx.globalAlpha=.35;for(let i=0;i<3;i++)R(Math.round(x)-6+i*5,Math.round(e.y-e.z-e.h/2)-2,2,2,'#ffffff');ctx.restore()}
 }
@@ -545,6 +612,11 @@ function drawPotion(k){const x=Math.round(k.x-camX),y=Math.round(k.y+Math.sin((f
  R(x-2,y-17,4,3,'#c9c3bc');R(x-3,y-14,6,2,'#8a2a2a');
  ctx.fillStyle='#d12a2a';ctx.beginPath();ctx.moveTo(x-5,y-12);ctx.lineTo(x+5,y-12);ctx.lineTo(x+4,y-1);ctx.lineTo(x-4,y-1);ctx.closePath();ctx.fill();
  R(x-5,y-12,10,2,'#ff7a6a');R(x-1,y-10,2,6,'#fff');R(x-3,y-8,6,2,'#fff')}
+function drawEBT(k){const x=Math.round(k.x-camX),y=Math.round(k.y+Math.sin((frame+k.x)*.09)*1.5);if(k.t<120&&frame%6<3)return;shadow(x,Math.round(k.y),7);
+ const g=ctx.createRadialGradient(x,y-6,2,x,y-6,14);g.addColorStop(0,'rgba(90,160,255,.5)');g.addColorStop(1,'rgba(90,160,255,0)');ctx.fillStyle=g;ctx.fillRect(x-14,y-20,28,28);
+ R(x-8,y-12,16,10,'#1a3a7a');R(x-8,y-12,16,3,'#2a6ad1');R(x-6,y-8,5,3,'#e8c85a');R(x+1,y-8,6,1,'#cfe0ff');R(x+1,y-6,6,1,'#cfe0ff');R(x-8,y-3,16,1,'#0d1e42')} /* the blue EBT card from the drawing */
+function drawCan(k){const x=Math.round(k.x-camX),y=Math.round(k.y);shadow(x,y,6);
+ R(x-3,y-9,7,9,'#9aa2ac');R(x-3,y-9,7,2,'#c2262e');R(x-3,y-3,7,2,'#c9ced6');R(x-2,y-10,5,1,'#6a7078')}
 function drawPizza(k){const x=Math.round(k.x-camX),y=Math.round(k.y);if(k.t<120&&frame%6<3)return;shadow(x,y,7);
  ctx.fillStyle='#f2c14a';ctx.beginPath();ctx.moveTo(x-7,y-10);ctx.lineTo(x+7,y-10);ctx.lineTo(x,y-1);ctx.fill();R(x-7,y-12,14,3,'#9a5a20');R(x-3,y-8,2,2,'#c2262e');R(x+2,y-7,2,2,'#c2262e')}
 function drawFX(){
@@ -556,16 +628,30 @@ function drawFX(){
   R(Math.round(x),Math.round(p.y-p.z),p.s,p.s,p.c)}
  for(const p of pops){ctx.save();ctx.globalAlpha=Math.min(1,p.life/15);txt(p.s,p.x-camX,p.y-p.z-10,7,p.c,'center');ctx.restore()}
 }
+function bossBarFracs(b){const third=b.max/3;return[0,1,2].map(i=>clamp(b.hp-(2-i)*third,0,third)/third)} /* three stacked lifebars, drawn top first: the pile depletes from the top, so the top bar holds his LAST third of health and the bottom bar his first */
+function bossBarFlash(b,i){const f=bossBarFracs(b)[i];return f>0&&f<.3&&frame%10<5} /* the bar that is draining flashes red under 30 percent */
+function drawCamp(){const x=Math.round(bonus.campX-camX); /* the camp: a tent at the left edge, three pixel hearts over it */
+ ctx.fillStyle='#3a2c18';ctx.beginPath();ctx.moveTo(x-24,254);ctx.lineTo(x,196);ctx.lineTo(x+24,254);ctx.closePath();ctx.fill();
+ ctx.fillStyle='#54401f';ctx.beginPath();ctx.moveTo(x-24,254);ctx.lineTo(x,196);ctx.lineTo(x+6,254);ctx.closePath();ctx.fill();
+ R(x-3,232,7,22,'#120c06');txt('CAMP',x,258,5,'#ffd34f','center',null);
+ for(let i=0;i<3;i++){const hx=x-13+i*11,hy=184,on=i<bonus.hearts,c=on?'#ff5a5a':'#453636';R(hx,hy,7,3,c);R(hx,hy+3,5,2,c);R(hx+1,hy+5,3,2,c)}}
 function hud(){
  const st=STAGES[stageIdx];
  R(4,4,126,36,'rgba(0,0,0,.55)');txt('LAZARUS',8,8,7,'#ffd34f');txt('x'+P.lives,104,8,7,'#fff');
- R(8,18,104,7,'#300');R(8,18,P.hp*1.04,7,P.hp>30||frame%10<5?'#e0302f':'#ff8080');R(8,18,104,1,'rgba(255,255,255,.25)');
+ R(8,18,104,7,'#300');R(8,18,Math.min(100,P.hp)*1.04,7,P.hp>30||frame%10<5?'#e0302f':'#ff8080');
+ if(P.hp>100)R(112,18,(P.hp-100)*1.04,7,'#ffd34f'); /* stacked health past 100 runs on past the bar in gold */
+ R(8,18,104,1,'rgba(255,255,255,.25)');txt('HP'+P.hp,62,8,6,P.hp>100?'#ffd34f':'#fff');
  txt('ROCK',8,30,6,'#bbb');R(40,30,72,5,'#222');R(40,30,P.meter*.72,5,P.meter>=100?(frame%8<4?'#fff27a':'#ffb020'):'#d08a10');
  txt(String(score).padStart(6,'0'),W-8,8,8,'#fff','right');
  txt('STAGE '+(stageIdx+1)+' / '+STAGES.length,W-8,22,6,'#7fd0ff','right');
  txt(st.name,W-8,32,5,'#ddd','right');
  if(P.meter>=100&&frame%40<28)txt('ROCK READY',W-8,44,6,'#ffd34f','right');
- if(boss&&!boss.dead&&boss.x-camX<W){txt(boss.name,W/2,H-30,7,'#e8b0ff','center');R(90,H-18,300,8,'#200');R(90,H-18,300*Math.max(0,boss.hp)/boss.max,8,boss.bar)}
+ if(boss&&!boss.dead&&boss.x-camX<W){txt(boss.name,W/2,H-38,7,'#e8b0ff','center');
+  const layerCols=[boss.bar,'#ffb020','#4fffb0'],fr=bossBarFracs(boss); /* old school: three stacked lifebars draining one at a time */
+  for(let i=0;i<3;i++){R(90,H-26+i*7,300,5,'#200');R(90,H-26+i*7,300*fr[i],5,bossBarFlash(boss,i)?'#ff2020':layerCols[i])}}
+ if(bonus){const secs=Math.ceil(bonus.t/60);R(W/2-92,44,184,22,'rgba(0,0,0,.55)');
+  txt(bonus.kind===1?'BONUS: CAN RUN':'BONUS: DEFEND THE CAMP',W/2,48,6,'#ffd34f','center');
+  txt(bonus.kind===1?'TIME '+secs+'   CANS '+bonus.cans:'TIME '+secs+'   CAMP HP '+bonus.hearts+'   STOPPED '+bonus.stopped,W/2,58,6,'#fff','center')}
  if(goT>0&&frame%30<20)txt('GO >>',W-12,112,12,'#ffd34f','right');
  if(introT>0&&introT<160){ctx.save();ctx.globalAlpha=Math.min(1,introT/30);txt('STAGE '+(stageIdx+1),W/2,92,9,'#ff6ac8','center');txt(st.name,W/2,108,12,'#fff','center');txt('GET TO: '+st.endName,W/2,128,6,'#ffd34f','center');ctx.restore()}
 }
@@ -574,7 +660,8 @@ function draw(){
  const keep=camX;camX=Math.round(camX);
  ctx.save();if(shake>0)ctx.translate(rnd(5)-2,rnd(5)-2);
  drawBG();
- const list=[...pickups.map(k=>({y:k.y-.1,d:()=>k.kind==='potion'?drawPotion(k):drawPizza(k)})),...projs.map(s=>({y:s.y+.2,d:()=>drawShock(s)})),...enemies.map(e=>({y:e.y,d:()=>drawEnt(e)}))];
+ if(bonus&&bonus.kind===2)drawCamp();
+ const list=[...pickups.map(k=>({y:k.y-.1,d:()=>k.kind==='potion'?drawPotion(k):k.kind==='ebt'?drawEBT(k):k.kind==='can'?drawCan(k):drawPizza(k)})),...projs.map(s=>({y:s.y+.2,d:()=>drawShock(s)})),...enemies.map(e=>({y:e.y,d:()=>drawEnt(e)}))];
  if(state!=='win')list.push({y:P.y,d:drawLaz});
  list.sort((a,b)=>a.y-b.y).forEach(o=>o.d());
  drawFX();ctx.restore();
@@ -584,14 +671,36 @@ function draw(){
   txt('LAZARUS VS. THE NIGHT VERMIN',W/2,94,7,'#e8b0ff','center');
   ['HE HAS ONE THING LEFT:','A MINT VAN HELSING CARTRIDGE.','THE COMIC SHOP PAYS CASH.','THE RACCOONS DRINK BLOOD.','THE RATS GREW WINGS.','THREE STAGES TO THE GIG.'].forEach((s,i)=>txt(s,W/2,116+i*13,7,'#ddd','center'));
   if(frame%50<34)txt('TAP OR PRESS ENTER',W/2,208,8,'#fff','center');
-  txt('JUMP TWICE TO FLIP OVER BOSSES',W/2,224,6,'#7fd0ff','center');
-  txt('FILL THE ROCK BAR, THEN HIT ROCK',W/2,236,6,'#ffb020','center')}
+  txt('JUMP TWICE TO FLIP, LAND WITH A CRASH',W/2,222,6,'#7fd0ff','center');
+  txt('ATTACK IN THE AIR FOR A DROPKICK',W/2,232,6,'#7fd0ff','center');
+  txt('FILL THE ROCK BAR, THEN HIT ROCK',W/2,242,6,'#ffb020','center')}
  else if(state==='over'){overlay(.7);txt('GAME OVER',W/2,80,22,'#e0302f','center');txt('THE VERMIN GOT THE CARTRIDGE',W/2,124,7,'#ddd','center');txt('SCORE '+score,W/2,148,8,'#ffd34f','center');if(stT>40&&frame%50<34)txt('TAP TO TRY THE STAGE AGAIN',W/2,190,8,'#fff','center')}
- else if(state==='win'){overlay(.62);txt('SOLD!',W/2,44,28,'#4fffb0','center');
-  ['COMIC CRYPT PAID $40','FOR VAN HELSING.','LAZARUS EATS TONIGHT.','HE MADE THE GIG.'].forEach((s,i)=>txt(s,W/2,96+i*16,8,'#fff','center'));
-  txt('FINAL SCORE '+score,W/2,172,9,'#ffd34f','center');if(stT>40&&frame%50<34)txt('TAP TO PLAY AGAIN',W/2,212,8,'#fff','center')}
+ else if(state==='win'){drawNewspaper()}
  camX=keep;
 }
+
+function drawNewspaper(){ /* the single victory photo: tomorrow's front page, drawn whole on the canvas */
+ R(0,0,W,H,'#0b0712');
+ R(56,8,368,252,'#d8d0bc');R(60,12,360,244,'#e9e2cf');
+ txt('THE DAILY GIG',W/2,22,20,'#1a1a1a','center',null);
+ R(70,50,340,1,'#1a1a1a');R(70,53,340,1,'#1a1a1a');
+ txt('VOL. 1 — NO. 1',70,58,5,'#4a4a42');txt('PRICE: ONE SONG',W-70,58,5,'#4a4a42','right',null);
+ txt('HOMELESS ROCKSTAR',W/2,72,16,'#1a1a1a','center',null);
+ txt('BECOMES MAYOR',W/2,94,16,'#1a1a1a','center',null);
+ txt('AND VOWS TO END HOMELESSNESS',W/2,118,8,'#33332c','center',null);
+ R(70,134,150,84,'#1a1a1a');R(73,137,144,78,'#8a94a8'); /* the framed front-page photo */
+ R(73,192,144,23,'#2c3444');
+ ctx.fillStyle='#ffd34f';ctx.beginPath();ctx.arc(196,150,7,0,7);ctx.fill(); /* a star over the skyline */
+ for(const bx of[84,106,128,150,172])R(bx,192,5,23,'#0d0d12');
+ ctx.save();ctx.translate(145,215); /* Lazarus in the photo, arms raised */
+ R(-2,-24,5,24,'#0d0d12');R(-14,-38,4,15,'#0d0d12');R(10,-38,4,15,'#0d0d12');R(-5,-28,11,7,'#0d0d12');R(-5,-39,11,11,'#0d0d12');R(-7,-42,15,4,'#0d0d12');
+ ctx.restore();
+ txt('THE MAYOR, AT THE GIG',145,222,5,'#4a4a42','center',null);
+ for(let c=0;c<2;c++)for(let i=0;i<10;i++)R(238+c*88,138+i*8,55+hash(i*3+c*7)*70,2,'#a39a83'); /* grey column lines: the article itself */
+ txt('SOLD! COMIC CRYPT PAID $40 FOR VAN HELSING.',W/2,232,5,'#4a4a42','center',null);
+ txt('LAZARUS EATS TONIGHT. — HE MADE THE GIG.',W/2,242,5,'#4a4a42','center',null);
+ txt('FINAL SCORE '+score,W/2,249,6,'#1a1a1a','center',null);
+ if(stT>40&&frame%50<34)txt('TAP TO PLAY AGAIN',W/2,262,5,'#fff','center')}
 
 /* ---------- loop ---------- */
 let last=0,acc=0;
@@ -602,8 +711,8 @@ requestAnimationFrame(loop);
 /* debug/testing hook: inert in play, lets a headless harness drive the game */
 window.__HRS={get state(){return state},get stageIdx(){return stageIdx},get stage(){return STAGES[stageIdx]},get P(){return P},
  get enemies(){return enemies},get boss(){return boss},get score(){return score},get waves(){return waves},get projs(){return projs},
- get pickups(){return pickups},get camX(){return camX},
- stages:STAGES,hurtEnemy,tick,pressObj:press,keysObj:keys,mkR,mkB,mkC,mkP,mkBoss,autoFace,
+ get pickups(){return pickups},get camX(){return camX},get pops(){return pops},get frame(){return frame},get bonus(){return bonus},
+ stages:STAGES,hurtEnemy,tick,pressObj:press,keysObj:keys,mkR,mkB,mkC,mkP,mkBoss,mkRat,mkO,autoFace,bossBarFracs,bossBarFlash,startBonus,endBonus,
  gotoStage(i){stageIdx=i;stageStartScore=score;setupStage();state='play'},
  setCam(x){camX=x;lockCam=x},
  start(){reset();state='play'},forceStart(){press.start=true}};
